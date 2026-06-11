@@ -41,20 +41,20 @@ There is **no pre-existing pure-Go SIMD base32** to compare against
 alternative-alphabet, Crockford, or CLI packages — none vectorised). So the
 comparison is purely **this package vs the stdlib scalar encoder**.
 
-Native amd64 numbers are produced by CI (`bench.yml`, GitHub Actions) because the
-dev box is arm64. Local measurement on an emulated QEMU Haswell VM (AVX2, 1 MiB
-buffer, `-count=3`, median MB/s) gave, as a sanity check:
+Encode throughput, 1 MiB buffer, **native amd64** (GitHub Actions, AMD EPYC,
+`GOAMD64=v1`, `-count=6`, median MB/s; CI-measured because the dev box is arm64):
 
 | implementation | kind | MB/s | vs stdlib |
 |---|---|---:|---:|
-| `encoding/base32` (stdlib) | scalar | ~195 | 1.0× |
-| **this package** | pure-Go SIMD (AVX2) | **~266** | **~1.4×** |
+| `encoding/base32` (stdlib) | scalar | ~1055 | 1.0× |
+| **this package (SSE2/SSSE3)** | pure-Go SIMD | **~5430** | **~5.1×** |
+| **this package (AVX2)** | pure-Go SIMD | **~8285** | **~7.9×** |
 
-QEMU's TCG does not model out-of-order execution, so these are a *floor*; native
-hardware (see the `bench` workflow) is the representative figure. The speedup is
-more modest than base64's because base32's 5-bit grouping forces an 8-byte store
-per 5-byte group (vs base64's full 16-byte store per 12 bytes) and a longer
-serial extract chain — inherent to the format.
+(A local emulated QEMU Haswell VM showed only ~1.4×, but QEMU's TCG does not
+model out-of-order execution — the native figures above are representative.) The
+speedup is somewhat below base64's because base32's 5-bit grouping forces an
+8-byte store per 5-byte group (vs base64's full 16-byte store per 12 bytes) and a
+longer serial extract chain — inherent to the format.
 
 - **arm64 / loong64 / riscv64**: encode falls back to `encoding/base32`. A NEON
   encode was prototyped but shelved: the per-char 5-bit fields need per-lane
