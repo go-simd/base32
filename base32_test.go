@@ -26,6 +26,40 @@ func TestEncode(t *testing.T) {
 	}
 }
 
+func TestDecode(t *testing.T) {
+	rng := rand.New(rand.NewSource(2))
+	for _, n := range []int{0, 1, 2, 4, 5, 10, 16, 21, 100, 1000} {
+		src := make([]byte, n)
+		rng.Read(src)
+		enc := EncodeToString(src)
+
+		// DecodedLen must be large enough for the decode buffer.
+		if got := DecodedLen(len(enc)); got < n {
+			t.Fatalf("n=%d: DecodedLen=%d < %d", n, got, n)
+		}
+		// Decode into a caller-supplied buffer.
+		dst := make([]byte, DecodedLen(len(enc)))
+		nn, err := Decode(dst, []byte(enc))
+		if err != nil {
+			t.Fatalf("n=%d: Decode: %v", n, err)
+		}
+		if string(dst[:nn]) != string(src) {
+			t.Fatalf("n=%d: Decode round-trip mismatch", n)
+		}
+	}
+}
+
+func TestDecodeError(t *testing.T) {
+	// Invalid base32 must surface the stdlib error through both wrappers.
+	if _, err := DecodeString("1!!!!!!!"); err == nil {
+		t.Fatal("DecodeString: want error on invalid input, got nil")
+	}
+	dst := make([]byte, 8)
+	if _, err := Decode(dst, []byte("1!!!!!!!")); err == nil {
+		t.Fatal("Decode: want error on invalid input, got nil")
+	}
+}
+
 func FuzzEncode(f *testing.F) {
 	f.Add([]byte("hello world"))
 	f.Add([]byte(""))

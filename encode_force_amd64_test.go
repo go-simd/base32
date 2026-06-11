@@ -67,3 +67,29 @@ func benchForce(b *testing.B, avx2 bool) {
 
 func BenchmarkEncodeForceSSE(b *testing.B)  { benchForce(b, false) }
 func BenchmarkEncodeForceAVX2(b *testing.B) { benchForce(b, true) }
+
+// TestEncodeSIMDDispatch drives every branch of the amd64 encodeSIMD dispatcher
+// through the public Encode API: the AVX2 path (n>=21, hasAVX2=true), the SSE
+// path (n>=16, hasAVX2=false), and the scalar-only return (n<16). hasAVX2 is
+// forced low for the SSE/scalar cases because CI runs on a native AVX2 box where
+// it is otherwise always true (restored via defer).
+func TestEncodeSIMDDispatch(t *testing.T) {
+	rng := rand.New(rand.NewSource(11))
+	check := func(n int) {
+		src := make([]byte, n)
+		rng.Read(src)
+		if got, want := EncodeToString(src), stdb32.StdEncoding.EncodeToString(src); got != want {
+			t.Fatalf("n=%d hasAVX2=%v:\n got=%q\nwant=%q", n, hasAVX2, got, want)
+		}
+	}
+	ns := []int{0, 8, 15, 16, 17, 20, 21, 22, 31, 32, 100}
+	for _, n := range ns {
+		check(n)
+	}
+	saved := hasAVX2
+	defer func() { hasAVX2 = saved }()
+	hasAVX2 = false
+	for _, n := range ns {
+		check(n)
+	}
+}
