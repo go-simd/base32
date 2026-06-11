@@ -1,0 +1,21 @@
+name: ci
+on:
+  push: { branches: [main] }
+  pull_request:
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, arch: amd64 }
+          - { os: ubuntu-24.04-arm, arch: arm64 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: go vet ./...
+      - run: go test -v ./...
+      - run: go test -run '^$' -fuzz FuzzEncode -fuzztime 15s ./...
+      - run: go test -run '^$' -fuzz FuzzDecode -fuzztime 15s ./...
