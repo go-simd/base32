@@ -12,10 +12,19 @@ the standard library, so output matches exactly.
 s := base32.EncodeToString(data)      // same bytes as encoding/base32.StdEncoding
 ```
 
-| op | amd64 | arm64 | loong64 / riscv64 |
-|---|---|---|---|
-| encode | **AVX2 + SSE2** | scalar (stdlib) | scalar (stdlib) |
-| decode | scalar (stdlib) | scalar | scalar |
+| op | amd64 | ppc64le | s390x | arm64 | loong64 / riscv64 |
+|---|---|---|---|---|---|
+| encode | **AVX2 + SSE2** | **VSX** | **vector facility** | scalar (stdlib) | scalar (stdlib) |
+| decode | scalar (stdlib) | scalar | scalar | scalar | scalar |
+
+The encode fast path covers four ISAs across six architectures. **ppc64le and
+s390x run the *full* spread-extract kernel** — the same algorithm amd64 uses —
+because POWER (VSX) and Z (vector facility) provide the per-lane variable shift /
+integer vector multiply-high that arm64's Go assembler does *not* expose, which
+is precisely what blocked the NEON port (see below). The ppc64le and s390x
+kernels are **qemu-validated** (byte-identical to `encoding/base32` via the
+exhaustive + fuzz differential tests under QEMU `power9` / `qemu`); **native
+hardware performance numbers are pending**.
 
 ## Algorithm
 
@@ -36,6 +45,32 @@ The **AVX2** path processes two groups at once (one per 128-bit lane, placed via
 full 16-byte store per group-pair. Constants come from go-asmgen's
 `emit.File.Data`. Verified against `encoding/base32` (table + exhaustive + fuzz,
 **on real AVX2 hardware**).
+
+### ppc64le (VSX) and s390x (vector facility)
+
+Both run the **same five-step kernel** as amd64; only the spelling changes.
+
+- **ppc64le** loads with `LXVB16X` (big-endian *element* semantics: memory byte 0
+  = element 0's MSB), spreads with `VPERM`, and replaces `PMULHUW` with a direct
+  **per-lane variable right shift `VSRH`** — `field >> p` is exactly what the
+  multiply-by-`2^(16-p)`-then-take-high-word trick computes, and VSX exposes the
+  variable shift natively. A second `VPERM` packs, `VAND` masks, and the ASCII map
+  uses `VCMPGTUB`/`VADDUBM`/`VSUBUBM`. VSX is baseline on POWER8+, so there is no
+  runtime dispatch. (VSX↔VMX aliasing: load into `VS(32+k)`, do arithmetic on
+  `Vk`.)
+- **s390x** is the one shipped non-amd64 arch with a genuine vector integer
+  **multiply-high (`VMLHH`)**, so it reproduces the amd64 `PMULHUW` step almost
+  instruction-for-instruction: `VL` → `VPERM` spread → `VMLHH` by `2^(16-p)` →
+  `VPERM` pack → `VN` mask → `VCHLB`/`VAB`/`VSB` ASCII map → `VST`. s390x is
+  **big-endian**, but `VL`/`VST` and the `VPERM` control vectors are laid out in
+  big-endian lane order (lane 0 = lowest address), which matches the amd64 byte
+  layout because amd64's 16-bit windows are themselves big-endian — so no
+  scan-direction reversal is needed. The cross-lane shuffle is pinned by a
+  position-dependent qemu test. The vector facility is baseline on z13+.
+
+Both kernels emit a full 16-byte store per 5-byte group (only the low 8 chars are
+kept); the dispatcher caps the group count so the final store stays in bounds and
+hands the tail to `encoding/base32`.
 
 ## Performance
 
@@ -59,21 +94,30 @@ speedup is somewhat below base64's because base32's 5-bit grouping forces an
 8-byte store per 5-byte group (vs base64's full 16-byte store per 12 bytes) and a
 longer serial extract chain — inherent to the format.
 
+- **ppc64le / s390x**: full SIMD encode (above), **qemu-validated, native perf
+  pending**. The nice twist: base32's SIMD encode was *blocked* on arm64 — but
+  POWER and Z supply exactly the missing primitive, so they run the whole kernel
+  where arm64 couldn't.
 - **arm64 / loong64 / riscv64**: encode falls back to `encoding/base32`. A NEON
   encode was prototyped but shelved: the per-char 5-bit fields need per-lane
   variable shifts, and the Go arm64 assembler exposes neither a register-form
   `USHL` nor an integer vector multiply (`VUMULL`/`VMUL`), so the multiply-shift
-  trick that the amd64 path relies on cannot be expressed.
+  trick that the amd64 path relies on cannot be expressed. ppc64le's `VSRH`
+  (variable shift) and s390x's `VMLHH` (multiply-high) are precisely those two
+  missing ops — which is why those two arches *can* run the full kernel.
 - **decode** is scalar (`encoding/base32`) for now — this keeps RFC 4648 error
   semantics (bad chars, padding) exactly identical to the stdlib; a SIMD decode
   is planned.
 
 ## Coverage
 
-The CI gate enforces **100% coverage of the Go code** on each arch job (native
-amd64 + native arm64; the `!amd64` generic fallback compiles and is measured on
-arm64). Coverage is of the Go statements only: the generated `.s` SIMD kernels
-are not measured by `go test -cover` — they are validated by differential tests
+The CI gate enforces **100% coverage of the Go code** on each arch job: native
+amd64 + native arm64, plus **emulated ppc64le + s390x** (cross-compiled test
+binary run under QEMU `power9` / `qemu` in a `debian:trixie` container, coverage
+profile extracted from the binary). The `!amd64 && !ppc64le && !s390x` generic
+fallback compiles and is measured on arm64. Coverage is of the Go statements
+only: the generated `.s` SIMD kernels are not measured by `go test -cover` — they
+are validated by differential tests
 against the scalar `encoding/base32` reference plus fuzzing.
 
 ## License
