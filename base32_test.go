@@ -87,6 +87,97 @@ func FuzzDecode(f *testing.F) {
 	})
 }
 
+// TestDecodeExhaustive hammers every input length 0..256 with many random
+// buffers, round-tripping through our Decode and comparing byte-for-byte against
+// encoding/base32. On an AVX2/VSX/vector host this drives the SIMD decode kernel
+// (and its scalar tail) across all block alignments — the real-hardware gate when
+// run from a precompiled binary (no fuzzing toolchain).
+func TestDecodeExhaustive(t *testing.T) {
+	rng := rand.New(rand.NewSource(101))
+	for n := 0; n <= 256; n++ {
+		for trial := 0; trial < 64; trial++ {
+			src := make([]byte, n)
+			rng.Read(src)
+			enc := base32.StdEncoding.EncodeToString(src)
+			dst := make([]byte, DecodedLen(len(enc)))
+			nn, err := Decode(dst, []byte(enc))
+			if err != nil {
+				t.Fatalf("n=%d trial=%d: decode err: %v", n, trial, err)
+			}
+			if string(dst[:nn]) != string(src) {
+				t.Fatalf("n=%d trial=%d: round-trip mismatch", n, trial)
+			}
+		}
+	}
+}
+
+// TestDecodeErrorExhaustive corrupts random alphabet strings (and feeds raw
+// random bytes) and requires the error/offset to match encoding/base32 exactly,
+// exercising the kernel's per-block validity bail and the offset-shift in Decode.
+func TestDecodeErrorExhaustive(t *testing.T) {
+	rng := rand.New(rand.NewSource(103))
+	for trial := 0; trial < 200000; trial++ {
+		var enc []byte
+		switch trial % 3 {
+		case 0:
+			n := rng.Intn(60)
+			src := make([]byte, n)
+			rng.Read(src)
+			enc = []byte(base32.StdEncoding.EncodeToString(src))
+			if len(enc) > 0 {
+				enc[rng.Intn(len(enc))] = "!@#$ \t01239xyz="[rng.Intn(15)]
+			}
+		case 1:
+			n := rng.Intn(60)
+			enc = make([]byte, n)
+			cs := "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567=!@ 019"
+			for i := range enc {
+				enc[i] = cs[rng.Intn(len(cs))]
+			}
+		default:
+			n := rng.Intn(60)
+			enc = make([]byte, n)
+			rng.Read(enc)
+		}
+		gotB, gotErr := DecodeString(string(enc))
+		wantB, wantErr := base32.StdEncoding.DecodeString(string(enc))
+		if (gotErr == nil) != (wantErr == nil) {
+			t.Fatalf("%q: err mismatch got=%v want=%v", enc, gotErr, wantErr)
+		}
+		if gotErr != nil {
+			if gotErr.Error() != wantErr.Error() {
+				t.Fatalf("%q: err offset mismatch got=%v want=%v", enc, gotErr, wantErr)
+			}
+			continue
+		}
+		if string(gotB) != string(wantB) {
+			t.Fatalf("%q: decode mismatch got=%x want=%x", enc, gotB, wantB)
+		}
+	}
+}
+
+func BenchmarkDecode(b *testing.B) {
+	src := benchData()
+	enc := []byte(base32.StdEncoding.EncodeToString(src))
+	dst := make([]byte, DecodedLen(len(enc)))
+	b.SetBytes(int64(len(src)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		Decode(dst, enc)
+	}
+}
+
+func BenchmarkDecodeStdlib(b *testing.B) {
+	src := benchData()
+	enc := []byte(base32.StdEncoding.EncodeToString(src))
+	dst := make([]byte, DecodedLen(len(enc)))
+	b.SetBytes(int64(len(src)))
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		base32.StdEncoding.Decode(dst, enc)
+	}
+}
+
 func benchData() []byte { b := make([]byte, 1<<20); rand.New(rand.NewSource(2)).Read(b); return b }
 
 func BenchmarkEncode(b *testing.B) {

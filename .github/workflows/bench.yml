@@ -17,5 +17,5 @@ jobs:
       - run: grep -m1 -oE 'avx2|avx512[a-z]+' /proc/cpuinfo | sort -u | tr "\n" " "; echo
       - name: go env
         run: go env GOARCH GOAMD64
-      - name: benchmark encode
-        run: go test -run '^$' -bench 'Encode' -benchmem -count=6 ./...
+      - name: benchmark encode + decode
+        run: go test -run '^$' -bench 'Encode|Decode' -benchmem -count=6 ./...
