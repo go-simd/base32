@@ -89,7 +89,19 @@ Encode throughput, 1 MiB buffer, **native amd64** (GitHub Actions, AMD EPYC,
 | **this package (AVX2)** | pure-Go SIMD | **~8285** | **~7.9×** |
 
 (A local emulated QEMU Haswell VM showed only ~1.4×, but QEMU's TCG does not
-model out-of-order execution — the native figures above are representative.) The
+model out-of-order execution — the native figures above are representative.)
+
+**Ratio re-confirmation (as of 2026-06-14):** re-benched `-count=6` medians on a
+QEMU x86_64 lima VM (so absolutes are TCG-low, but the SSE-vs-stdlib *ratio*
+holds): forced-SSE **~243 MB/s vs stdlib ~181 MB/s = ~1.34×** — SIMD still beats
+the scalar encoder even on the worst-case in-order TCG model. (Forced-AVX2 is
+~parity under TCG, ~185 MB/s: 32-byte ops gain nothing without OoO execution —
+exactly why the native EPYC numbers above are the representative ones.) On
+**native arm64** ours is an alias of `encoding/base32` (no NEON encode — see
+below), so it measures at stdlib parity by construction. Verdict unchanged: SIMD
+encode wins on amd64; arm64 = stdlib fallback.
+
+The
 speedup is somewhat below base64's because base32's 5-bit grouping forces an
 8-byte store per 5-byte group (vs base64's full 16-byte store per 12 bytes) and a
 longer serial extract chain — inherent to the format.
@@ -98,6 +110,40 @@ longer serial extract chain — inherent to the format.
   pending**. The nice twist: base32's SIMD encode was *blocked* on arm64 — but
   POWER and Z supply exactly the missing primitive, so they run the whole kernel
   where arm64 couldn't.
+
+### ppc64le / s390x — llvm-mca cycle-model estimate
+
+**Static analysis, NOT a hardware measurement; native perf pending real silicon.**
+There is no native POWER/Z runner here and QEMU's TCG is not cycle-accurate, so
+the only defensible perf signal on these two arches is a cycle-model estimate.
+The committed inner loops (one 16-byte vector iteration emits 8 base32 chars from
+5 input bytes) were extracted from `encode_ppc64le.s` / `encode_s390x.s` and fed
+to `llvm-mca` (LLVM 22, which has production PowerPC and SystemZ backends):
+
+```
+llvm-mca -mtriple=powerpc64le-unknown-linux-gnu -mcpu=pwr9 <loop.s>
+llvm-mca -mtriple=s390x-unknown-linux-gnu -mcpu=z14  <loop.s>
+```
+
+A representative *scalar* base32 inner loop processing the identical 5-in/8-out
+group (per-char shift → mask → table load → store) was modelled the same way for
+an apples-to-apples ×scalar ratio:
+
+| arch (cpu) | SIMD loop `Block RThroughput` | scalar loop `Block RThroughput` | est. ×scalar | est. out-bytes/cycle |
+|---|---:|---:|---:|---:|
+| ppc64le (pwr9) | ~5.3 cyc/iter | ~7.5 cyc/iter | **~1.4×** | **~1.5** |
+| s390x (z14)    | ~4.0 cyc/iter | ~13.0 cyc/iter | **~3.25×** | **~2.0** |
+
+Caveats: `Block RThroughput` is a steady-state *throughput ceiling* (no front-end,
+cache, branch-mispredict or dependency-stall modelling); the scalar baseline is a
+hand-modelled idealised loop (table-driven, no bounds checks), so the real Go
+scalar fallback would be slower — i.e. these ×scalar figures are conservative
+*lower* bounds for the SIMD win. z14's wider vector pipeline + the single-shot
+`VMLHH` multiply (vs POWER's `VSRH` variable-shift dependency chain) is why Z
+models meaningfully faster than POWER here. Every instruction in both loops is
+modelled by llvm-mca (no unmodelable op). Treat these as ordering/ballpark
+estimates only — they will be replaced with native `bytes/cycle` once real POWER9
+and z14/z15 hardware is available.
 - **arm64 / loong64 / riscv64**: encode falls back to `encoding/base32`. A NEON
   encode was prototyped but shelved: the per-char 5-bit fields need per-lane
   variable shifts, and the Go arm64 assembler exposes neither a register-form
