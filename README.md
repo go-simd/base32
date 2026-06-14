@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/go-simd/brand/main/social/go-simd.png" alt="go-simd/base32" width="720"></p>
+
 # base32
 
 [![CI](https://github.com/go-simd/base32/actions/workflows/ci.yml/badge.svg)](https://github.com/go-simd/base32/actions/workflows/ci.yml)
@@ -17,17 +19,21 @@ b, err := base32.DecodeString(s)      // same bytes AND same error offsets
 
 | op | amd64 | ppc64le | s390x | arm64 | loong64 / riscv64 |
 |---|---|---|---|---|---|
-| encode | **AVX2 + SSE2** | **VSX** | **vector facility** | scalar (stdlib) | scalar (stdlib) |
+| encode | **AVX2 + SSE2** | **VSX** | **vector facility** | **NEON** on **Go 1.27+**, scalar on stable | scalar (stdlib) |
 | decode | **AVX2 + SSE2** | **VSX** | **vector facility** | scalar (stdlib) | scalar (stdlib) |
 
-Both fast paths cover four ISAs across six architectures. **ppc64le and s390x run
-the *full* kernel** — the same algorithm amd64 uses — because POWER (VSX) and Z
-(vector facility) provide the per-lane variable shift / integer vector multiply
-that arm64's Go assembler does *not* expose, which is precisely what blocked the
-NEON port (see below). The ppc64le and s390x kernels are **qemu-validated**
-(byte-and-error-identical to `encoding/base32` via the exhaustive + fuzz
-differential tests under QEMU `power9` / `qemu`); **native hardware performance
-numbers are pending**.
+The encode fast path covers five ISAs across six architectures. **ppc64le, s390x
+and (on Go 1.27+) arm64 run the *full* kernel** — the same algorithm amd64 uses —
+because POWER (VSX), Z (vector facility) and NEON each provide the per-lane
+variable shift / integer vector multiply the amd64 path relies on. On arm64 those
+ops (`VUMULL`, `VUSHL`, `VTBL`) were only added to the Go assembler in **Go
+1.27**, which is precisely what blocked the NEON port until now (see below); on
+**stable Go (≤ 1.26)** arm64 encode falls back to `encoding/base32`. The ppc64le
+and s390x kernels are **qemu-validated** (byte-and-error-identical to
+`encoding/base32` via the exhaustive + fuzz differential tests under QEMU
+`power9` / `qemu`); the arm64 NEON kernel is **validated on native arm64 with the
+`gotip` (1.27-devel) toolchain**. Native ppc64le/s390x hardware performance
+numbers are pending.
 
 ## Algorithm
 
@@ -74,6 +80,32 @@ Both run the **same five-step kernel** as amd64; only the spelling changes.
 Both kernels emit a full 16-byte store per 5-byte group (only the low 8 chars are
 kept); the dispatcher caps the group count so the final store stays in bounds and
 hands the tail to `encoding/base32`.
+
+### arm64 (NEON) — Go 1.27+
+
+The NEON encode kernel is a faithful port of the amd64 five-step path, and is the
+concrete demonstration of the three NEON ops the *released* Go arm64 assembler
+does not expose but **Go master / Go 1.27** does — the same gap ppc64le (`VSRH`)
+and s390x (`VMLHH`) already worked around:
+
+- **`VUMULL` / `VUMULL2`** — the integer *widening* vector multiply (16×16 → 32).
+  Released Go only assembled the polynomial `VPMULL`; the integer multiply
+  mnemonics landed upstream in Go 1.27. The kernel multiplies each 16-bit window
+  by `2^(16-p)` and keeps the high 16 bits (multiply-high == amd64 `PMULHUW`).
+- **`VUSHL`** — the per-lane *register-variable* shift (one count per lane, taken
+  from a vector register), used to take the high half of each 32-bit product.
+- **`VTBL`** — table-lookup permute, used twice: once to spread the 5-byte group
+  into eight big-endian 16-bit windows, once as the 32-entry base32 alphabet LUT
+  (a two-register table covering indices 0..31, replacing the two-range ASCII
+  arithmetic the amd64 path uses).
+
+The chain is `VLD1` → `VTBL` spread → `VUMULL`/`VUMULL2` → `VUSHL` (−16) → `VXTN`
+→ `VAND 0x1f` → `VTBL` pack → `VTBL` alphabet → `VST1`. NEON is baseline on
+arm64, so there is no runtime dispatch. The kernel is gated `//go:build arm64 &&
+go1.27`; on **stable Go (≤ 1.26)** the build falls back to the scalar
+`encoding/base32` path (`encode_generic.go`). Validated byte-and-error-identical
+to `encoding/base32` (table + exhaustive + `FuzzEncode`) on **native arm64 under
+`gotip`**, where it measures **~2.1× the stdlib scalar encoder**.
 
 ## Decode
 
@@ -129,9 +161,12 @@ holds): forced-SSE **~243 MB/s vs stdlib ~181 MB/s = ~1.34×** — SIMD still be
 the scalar encoder even on the worst-case in-order TCG model. (Forced-AVX2 is
 ~parity under TCG, ~185 MB/s: 32-byte ops gain nothing without OoO execution —
 exactly why the native EPYC numbers above are the representative ones.) On
-**native arm64** ours is an alias of `encoding/base32` (no NEON encode — see
-below), so it measures at stdlib parity by construction. Verdict unchanged: SIMD
-encode wins on amd64; arm64 = stdlib fallback.
+**native arm64 under `gotip` / Go 1.27** the NEON encode kernel engages and
+measures **~7400 MB/s vs the stdlib scalar encoder ~3530 MB/s ≈ 2.1×** (`-count`
+medians on an Apple-silicon dev box; see the arm64 section above). On **stable Go
+(≤ 1.26)** arm64 encode is an alias of `encoding/base32` (stdlib parity by
+construction). Verdict: SIMD encode wins on amd64 and on arm64/go1.27+; arm64 on
+stable Go = stdlib fallback.
 
 The
 speedup is somewhat below base64's because base32's 5-bit grouping forces an
@@ -148,9 +183,11 @@ native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
 (stdlib parity by construction).
 
 - **ppc64le / s390x**: full SIMD encode (above), **qemu-validated, native perf
-  pending**. The nice twist: base32's SIMD encode was *blocked* on arm64 — but
-  POWER and Z supply exactly the missing primitive, so they run the whole kernel
-  where arm64 couldn't.
+  pending**. POWER and Z supply the per-lane variable shift / multiply-high
+  natively, so they run the whole kernel — and as of Go 1.27 arm64 NEON does too
+  (the ops it was missing finally landed upstream).
+- **arm64 (Go 1.27+)**: full NEON SIMD encode (above), **validated on native
+  arm64 under `gotip`, ~2.1× the stdlib scalar encoder**.
 
 ### ppc64le / s390x — llvm-mca cycle-model estimate
 
@@ -185,15 +222,18 @@ models meaningfully faster than POWER here. Every instruction in both loops is
 modelled by llvm-mca (no unmodelable op). Treat these as ordering/ballpark
 estimates only — they will be replaced with native `bytes/cycle` once real POWER9
 and z14/z15 hardware is available.
-- **arm64 / loong64 / riscv64**: encode falls back to `encoding/base32`. A NEON
-  encode was prototyped but shelved: the per-char 5-bit fields need per-lane
-  variable shifts, and the Go arm64 assembler exposes neither a register-form
-  `USHL` nor an integer vector multiply (`VUMULL`/`VMUL`), so the multiply-shift
-  trick that the amd64 path relies on cannot be expressed. ppc64le's `VSRH`
-  (variable shift) and s390x's `VMLHH` (multiply-high) are precisely those two
-  missing ops — which is why those two arches *can* run the full kernel.
-- **decode** now runs the same four-ISA SIMD coverage as encode (amd64 AVX2+SSE,
-  ppc64le VSX, s390x vector facility; arm64/loong64/riscv64 scalar). Error and
+- **arm64**: on **stable Go (≤ 1.26)** encode falls back to `encoding/base32` —
+  the per-char 5-bit fields need a per-lane variable shift and an integer vector
+  multiply, and the *released* Go arm64 assembler exposed neither a register-form
+  `VUSHL` nor the integer `VUMULL`/`VMUL`, so the multiply-shift trick could not
+  be expressed. Those mnemonics were upstreamed in **Go 1.27**, so on **Go 1.27+**
+  a `//go:build arm64 && go1.27` NEON kernel runs the full encode (above). The
+  exact ops ppc64le (`VSRH`) and s390x (`VMLHH`) used to work around the gap are
+  now natively available on arm64 too.
+- **loong64 / riscv64**: encode falls back to `encoding/base32`.
+- **decode** runs the same SIMD coverage on amd64 (AVX2+SSE), ppc64le (VSX) and
+  s390x (vector facility); arm64/loong64/riscv64 use the scalar stdlib decode
+  (there is no NEON *decode* kernel — the arm64 fast path is encode-only). Error and
   padding semantics stay exactly identical to the stdlib because every block that
   isn't a full 8 valid-alphabet chars (and the final block) is delegated to
   `encoding/base32`, with `CorruptInputError` offsets shifted to match.
@@ -201,13 +241,17 @@ and z14/z15 hardware is available.
 ## Coverage
 
 The CI gate enforces **100% coverage of the Go code** on each arch job: native
-amd64 + native arm64, plus **emulated ppc64le + s390x** (cross-compiled test
-binary run under QEMU `power9` / `qemu` in a `debian:trixie` container, coverage
-profile extracted from the binary). The `!amd64 && !ppc64le && !s390x` generic
-fallback compiles and is measured on arm64. Coverage is of the Go statements
-only: the generated `.s` SIMD kernels are not measured by `go test -cover` — they
-are validated by differential tests
-against the scalar `encoding/base32` reference plus fuzzing.
+amd64 + native arm64 (stable), a native **arm64 / `gotip` (Go 1.27-devel)** job
+that compiles and covers the `//go:build arm64 && go1.27` NEON kernel, plus
+**emulated ppc64le + s390x** (cross-compiled test binary run under QEMU `power9` /
+`qemu` in a `debian:trixie` container, coverage profile extracted from the
+binary). On stable arm64 the
+`!amd64 && !ppc64le && !s390x && !(arm64 && go1.27)` generic fallback compiles and
+is measured; on the `gotip` job the NEON path is measured instead. Coverage is of
+the Go statements only: the generated `.s` SIMD kernels are not measured by `go
+test -cover` — they are validated by differential tests against the scalar
+`encoding/base32` reference plus fuzzing (`FuzzEncode`/`FuzzDecode`, run on the
+`gotip` job so the NEON kernel is fuzzed too).
 
 ## License
 

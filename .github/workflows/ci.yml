@@ -25,6 +25,29 @@ jobs:
           pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
           echo "coverage=$pct"
           [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
+  # The arm64 NEON encode kernel uses the integer widening multiply (VUMULL),
+  # the register-variable shift (VUSHL) and table-lookup (VTBL) the Go assembler
+  # only gained in Go 1.27, so it builds under //go:build arm64 && go1.27.
+  # Exercise it on the gotip (1.27-devel) toolchain on native arm64, and gate at
+  # 100% — this is the only job that compiles and covers encode_arm64.go / .s.
+  arm64-go1_27:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: stable }
+      - run: go install golang.org/dl/gotip@latest && gotip download
+      - run: gotip version
+      - run: gotip vet ./...
+      - run: gotip test -v ./...
+      - run: gotip test -run '^$' -fuzz FuzzEncode -fuzztime 15s ./...
+      - run: gotip test -run '^$' -fuzz FuzzDecode -fuzztime 15s ./...
+      - name: coverage gate (100%, NEON)
+        run: |
+          gotip test -covermode=atomic -coverprofile=cov.out ./...
+          pct=$(gotip tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
   emulated:
     runs-on: ubuntu-latest
     strategy:

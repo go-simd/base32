@@ -1,4 +1,4 @@
-//go:build !amd64 && !ppc64le && !s390x
+//go:build !amd64 && !ppc64le && !s390x && !(arm64 && go1.27)
 
 package base32
 
