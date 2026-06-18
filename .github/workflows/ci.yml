@@ -12,8 +12,8 @@ jobs:
           - { os: ubuntu-24.04-arm, arch: arm64 }
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with: { go-version: stable }
       - run: go vet ./...
       - run: go test -v ./...
@@ -33,8 +33,8 @@ jobs:
   arm64-go1_27:
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with: { go-version: stable }
       - run: go install golang.org/dl/gotip@latest && gotip download
       - run: gotip version
@@ -57,8 +57,8 @@ jobs:
           - { arch: ppc64le, image: "debian:trixie", qemu: "power9" }
           - { arch: s390x,   image: "debian:trixie", qemu: "qemu" }
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v6
         with: { go-version: stable }
       - run: docker run --privileged --rm tonistiigi/binfmt --install all
       - run: CGO_ENABLED=0 GOOS=linux GOARCH=${{ matrix.arch }} go test -c -cover -o /tmp/t.test .
