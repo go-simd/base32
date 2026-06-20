@@ -197,6 +197,12 @@ native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
   finally landed upstream).
 - **arm64 (Go 1.27+)**: full NEON SIMD encode (above), **validated on native
   arm64 under `gotip`, ~2.1× the stdlib scalar encoder**.
+- **riscv64**: now **natively measured on a real SpacemiT X60** (RVV 1.0, GCC
+  Compile Farm, Go 1.26.4, June 2026). **Honest result: scalar parity** —
+  decode **27.4 vs stdlib 27.6 MB/s**, encode **155 vs 155** (encode falls back
+  to `encoding/base32` here, and decode is an alias of the stdlib decoder). No
+  RVV win on this low-power, *in-order* core (currently the only widely-available
+  RVV 1.0 silicon); the SIMD encode wins stay on amd64, ppc64le and arm64 (1.27).
 
 ### s390x — llvm-mca cycle-model estimate (ppc64le now measured on hardware)
 
