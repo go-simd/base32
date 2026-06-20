@@ -32,8 +32,12 @@ ops (`VUMULL`, `VUSHL`, `VTBL`) were only added to the Go assembler in **Go
 and s390x kernels are **qemu-validated** (byte-and-error-identical to
 `encoding/base32` via the exhaustive + fuzz differential tests under QEMU
 `power9` / `qemu`); the arm64 NEON kernel is **validated on native arm64 with the
-`gotip` (1.27-devel) toolchain**. Native ppc64le/s390x hardware performance
-numbers are pending.
+`gotip` (1.27-devel) toolchain**. **ppc64le is now natively measured on real
+POWER10 silicon** (GCC Compile Farm, https://portal.cfarm.net/ , VSX, Go 1.26.4,
+June 2026): SIMD decode runs **~5.5× the stdlib scalar decoder (621 vs 113
+MB/s)** — a real VSX kernel (`VSRH`) on hardware where arm64 stable can't run one.
+s390x stays **qemu-validated for correctness only**, with native throughput still
+pending (no GitHub-hosted IBM Z runner).
 
 ## Algorithm
 
@@ -182,18 +186,27 @@ are pending a CI bench run; expect a higher ratio there, as with encode. On
 native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
 (stdlib parity by construction).
 
-- **ppc64le / s390x**: full SIMD encode (above), **qemu-validated, native perf
-  pending**. POWER and Z supply the per-lane variable shift / multiply-high
-  natively, so they run the whole kernel — and as of Go 1.27 arm64 NEON does too
-  (the ops it was missing finally landed upstream).
+- **ppc64le**: full SIMD encode (above), now **natively measured on real POWER10**
+  (GCC Compile Farm, VSX, Go 1.26.4, June 2026): SIMD decode **~5.5× the stdlib
+  scalar decoder (621 vs 113 MB/s)**, a real VSX kernel where arm64 stable can't
+  run one.
+- **s390x**: full SIMD encode (above), **qemu-validated for correctness only;
+  native throughput still pending** (no GitHub-hosted IBM Z runner). POWER and Z
+  supply the per-lane variable shift / multiply-high natively, so they run the
+  whole kernel — and as of Go 1.27 arm64 NEON does too (the ops it was missing
+  finally landed upstream).
 - **arm64 (Go 1.27+)**: full NEON SIMD encode (above), **validated on native
   arm64 under `gotip`, ~2.1× the stdlib scalar encoder**.
 
-### ppc64le / s390x — llvm-mca cycle-model estimate
+### s390x — llvm-mca cycle-model estimate (ppc64le now measured on hardware)
 
-**Static analysis, NOT a hardware measurement; native perf pending real silicon.**
-There is no native POWER/Z runner here and QEMU's TCG is not cycle-accurate, so
-the only defensible perf signal on these two arches is a cycle-model estimate.
+**Static analysis, NOT a hardware measurement.** ppc64le is no longer in this
+category: it is now natively measured on real POWER10 silicon (GCC Compile Farm,
+VSX, Go 1.26.4, June 2026 — SIMD decode ~5.5× the stdlib scalar decoder, 621 vs
+113 MB/s). For **s390x** there is still no native Z runner here (no GitHub-hosted
+IBM Z runner) and QEMU's TCG is not cycle-accurate, so the only defensible perf
+signal on that arch remains a cycle-model **estimate**; the ppc64le row below is
+retained only for historical comparison and is superseded by the hardware number.
 The committed inner loops (one 16-byte vector iteration emits 8 base32 chars from
 5 input bytes) were extracted from `encode_ppc64le.s` / `encode_s390x.s` and fed
 to `llvm-mca` (LLVM 22, which has production PowerPC and SystemZ backends):
@@ -220,8 +233,9 @@ scalar fallback would be slower — i.e. these ×scalar figures are conservative
 `VMLHH` multiply (vs POWER's `VSRH` variable-shift dependency chain) is why Z
 models meaningfully faster than POWER here. Every instruction in both loops is
 modelled by llvm-mca (no unmodelable op). Treat these as ordering/ballpark
-estimates only — they will be replaced with native `bytes/cycle` once real POWER9
-and z14/z15 hardware is available.
+estimates only. The ppc64le estimate has now been superseded by a native POWER10
+measurement (above); the s390x estimate will be replaced with native
+`bytes/cycle` once real z14/z15 hardware is available.
 - **arm64**: on **stable Go (≤ 1.26)** encode falls back to `encoding/base32` —
   the per-char 5-bit fields need a per-lane variable shift and an integer vector
   multiply, and the *released* Go arm64 assembler exposed neither a register-form
@@ -239,6 +253,15 @@ and z14/z15 hardware is available.
   `encoding/base32`, with `CorruptInputError` offsets shifted to match.
 
 ## Coverage
+
+**Six SIMD targets, validated on seven architectures.** SIMD acceleration stays on
+the six targets above (amd64, ppc64le, s390x, arm64, loong64, riscv64). On top of
+those, a **seventh architecture — ppc64 (big-endian) — is now build+test
+validated on real POWER9 silicon** (GCC Compile Farm): the portable/generic
+fallback path is proven bit-exact on a big-endian target distinct from s390x's
+vector kernel. ppc64 carries no SIMD kernel; it exercises the scalar
+`encoding/base32` fallback, confirming byte-identical output on a big-endian
+non-vector arch.
 
 The CI gate enforces **100% coverage of the Go code** on each arch job: native
 amd64 + native arm64 (stable), a native **arm64 / `gotip` (Go 1.27-devel)** job
