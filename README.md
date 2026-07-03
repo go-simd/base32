@@ -36,8 +36,11 @@ and s390x kernels are **qemu-validated** (byte-and-error-identical to
 POWER9 silicon** (GCC Compile Farm, https://portal.cfarm.net/ , VSX, Go 1.26.4,
 2026-06-26): SIMD decode runs **~5.5× the stdlib scalar decoder (621 vs 113
 MB/s)** — a real VSX kernel (`VSRH`) on hardware where arm64 stable can't run one.
-s390x stays **qemu-validated for correctness only**, with native throughput still
-pending (no GitHub-hosted IBM Z runner).
+**s390x — measured on real z15** (LPAR guest, VXE2, Ubuntu 6.8, go1.26.4,
+2026-07-03): encode **3954 MB/s = 3.4× stdlib** (1176 MB/s), decode
+**1953 MB/s = 8.5× stdlib** (230 MB/s) — decode wins bigger than encode
+because stdlib base32 decode is unusually slow (branch-heavy alphabet
+lookup). Retracts the pending caveat.
 
 ## Algorithm
 
@@ -190,10 +193,12 @@ native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
   (GCC Compile Farm, VSX, Go 1.26.4, 2026-06-26): SIMD decode **~5.5× the stdlib
   scalar decoder (621 vs 113 MB/s)**, a real VSX kernel where arm64 stable can't
   run one.
-- **s390x**: full SIMD encode (above), **qemu-validated for correctness only;
-  native throughput still pending** (no GitHub-hosted IBM Z runner). POWER and Z
-  supply the per-lane variable shift / multiply-high natively, so they run the
-  whole kernel — and as of Go 1.27 arm64 NEON does too (the ops it was missing
+- **s390x**: full SIMD encode + decode, **measured on real z15** (LPAR / VXE2 /
+  2026-07-03): encode **3954 MB/s = 3.4× stdlib**, decode **1953 MB/s = 8.5×
+  stdlib** (stdlib base32 decode is unusually slow, hence the wider decode gap).
+  POWER and Z supply the per-lane variable shift / multiply-high natively, so
+  they run the whole kernel — and as of Go 1.27 arm64 NEON does too (the ops
+  it was missing
   finally landed upstream).
 - **arm64 (Go 1.27+)**: full NEON SIMD encode (above), **validated on native
   arm64 under `gotip`, ~2.1× the stdlib scalar encoder**.
