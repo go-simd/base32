@@ -36,8 +36,9 @@ and s390x kernels are **qemu-validated** (byte-and-error-identical to
 POWER9 silicon** (GCC Compile Farm, https://portal.cfarm.net/ , VSX, Go 1.26.4,
 2026-06-26): SIMD decode runs **~5.5× the stdlib scalar decoder (621 vs 113
 MB/s)** — a real VSX kernel (`VSRH`) on hardware where arm64 stable can't run one.
-s390x stays **qemu-validated for correctness only**, with native throughput still
-pending (no GitHub-hosted IBM Z runner).
+s390x is now **natively measured on real IBM z15 (VXE2)** (2026-07-03,
+`-count=6`): SIMD decode runs **~8.4×** and encode **~3.4×** the stdlib scalar
+baseline.
 
 ## Algorithm
 
@@ -190,8 +191,9 @@ native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
   (GCC Compile Farm, VSX, Go 1.26.4, 2026-06-26): SIMD decode **~5.5× the stdlib
   scalar decoder (621 vs 113 MB/s)**, a real VSX kernel where arm64 stable can't
   run one.
-- **s390x**: full SIMD encode (above), **qemu-validated for correctness only;
-  native throughput still pending** (no GitHub-hosted IBM Z runner). POWER and Z
+- **s390x**: full SIMD encode (above), now **natively measured on real IBM z15
+  (VXE2)** (2026-07-03, `-count=6`): SIMD decode **~8.4×** and encode **~3.4×**
+  the stdlib scalar baseline. POWER and Z
   supply the per-lane variable shift / multiply-high natively, so they run the
   whole kernel — and as of Go 1.27 arm64 NEON does too (the ops it was missing
   finally landed upstream).
@@ -204,15 +206,15 @@ native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
   RVV win on this low-power, *in-order* core (currently the only widely-available
   RVV 1.0 silicon); the SIMD encode wins stay on amd64, ppc64le and arm64 (1.27).
 
-### s390x — llvm-mca cycle-model estimate (ppc64le now measured on hardware)
+### llvm-mca cycle-model estimate (historical — both ppc64le and s390x now measured)
 
-**Static analysis, NOT a hardware measurement.** ppc64le is no longer in this
-category: it is now natively measured on real POWER9 silicon (GCC Compile Farm,
-VSX, Go 1.26.4, 2026-06-26 — SIMD decode ~5.5× the stdlib scalar decoder, 621 vs
-113 MB/s). For **s390x** there is still no native Z runner here (no GitHub-hosted
-IBM Z runner) and QEMU's TCG is not cycle-accurate, so the only defensible perf
-signal on that arch remains a cycle-model **estimate**; the ppc64le row below is
-retained only for historical comparison and is superseded by the hardware number.
+**Static analysis, NOT a hardware measurement — retained for historical
+comparison.** Both non-amd64 SIMD arches here are now natively measured: ppc64le
+on real POWER9 silicon (GCC Compile Farm, VSX, Go 1.26.4, 2026-06-26 — SIMD
+decode ~5.5× the stdlib scalar decoder, 621 vs 113 MB/s) and **s390x on real IBM
+z15 (VXE2), 2026-07-03, `-count=6` — SIMD decode ~8.4×, encode ~3.4× the stdlib
+scalar baseline**. The cycle-model rows below are superseded by those hardware
+numbers and kept only for reference.
 The committed inner loops (one 16-byte vector iteration emits 8 base32 chars from
 5 input bytes) were extracted from `encode_ppc64le.s` / `encode_s390x.s` and fed
 to `llvm-mca` (LLVM 22, which has production PowerPC and SystemZ backends):
@@ -229,7 +231,7 @@ an apples-to-apples ×scalar ratio:
 | arch (cpu) | SIMD loop `Block RThroughput` | scalar loop `Block RThroughput` | est. ×scalar | est. out-bytes/cycle |
 |---|---:|---:|---:|---:|
 | ppc64le (pwr9) | ~5.3 cyc/iter | ~7.5 cyc/iter | **~1.4×** | **~1.5** |
-| s390x (z14)    | ~4.0 cyc/iter | ~13.0 cyc/iter | **~3.25×** | **~2.0** |
+| s390x (z14, est.) | ~4.0 cyc/iter | ~13.0 cyc/iter | ~3.25× (measured z15: decode **~8.4×**, encode **~3.4×**) | **~2.0** |
 
 Caveats: `Block RThroughput` is a steady-state *throughput ceiling* (no front-end,
 cache, branch-mispredict or dependency-stall modelling); the scalar baseline is a
@@ -240,8 +242,9 @@ scalar fallback would be slower — i.e. these ×scalar figures are conservative
 models meaningfully faster than POWER here. Every instruction in both loops is
 modelled by llvm-mca (no unmodelable op). Treat these as ordering/ballpark
 estimates only. The ppc64le estimate has now been superseded by a native POWER9
-measurement (above); the s390x estimate will be replaced with native
-`bytes/cycle` once real z14/z15 hardware is available.
+measurement (above), and the s390x estimate by the native IBM z15 (VXE2)
+measurement (2026-07-03): SIMD decode ~8.4×, encode ~3.4× the stdlib scalar
+baseline.
 - **arm64**: on **stable Go (≤ 1.26)** encode falls back to `encoding/base32` —
   the per-char 5-bit fields need a per-lane variable shift and an integer vector
   multiply, and the *released* Go arm64 assembler exposed neither a register-form
