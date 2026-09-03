@@ -31,6 +31,47 @@ jobs:
   # only gained in Go 1.27, so it builds under //go:build arm64 && go1.27.
   # Exercise it on the gotip (1.27-devel) toolchain on native arm64, and gate at
   # 100% — this is the only job that compiles and covers encode_arm64.go / .s.
+  # macOS and Windows.
+  #
+  # A fleet audit of the 601 repositories holding Go code found the OS axis to
+  # be the real gap, not the architecture axis: windows is absent from 54.4% of
+  # them and macOS from 48.6%, while each of riscv64, loong64, ppc64le and
+  # s390x is missing from only ~31.4%. This repository is pure computation, so
+  # there is no platform reason for the gap -- which is why the audit listed it
+  # as actionable rather than constrained.
+  #
+  # It is a job of its own rather than two more entries in the matrix above,
+  # because that matrix is about ARCHITECTURE and because its steps use POSIX
+  # shell (`set -euo pipefail`, `CGO_ENABLED=0 go build`) that the Windows
+  # runner's PowerShell reads as a command it cannot find. CGO_ENABLED moves to
+  # env and the scripted step asks for bash by name.
+  os-matrix:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    env:
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./...
+      - run: go test -run '^Fuzz' ./...
+      - name: coverage gate (100%)
+        shell: bash
+        run: |
+          go test -covermode=atomic -coverprofile=cov.out ./...
+          pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
+          echo "coverage=$pct"
+          [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
+
+
   arm64-go1_27:
     runs-on: ubuntu-24.04-arm
     steps:
