@@ -39,7 +39,7 @@ jobs:
   # The arm64 NEON kernels build only under //go:build go1.27, so fuzz them on
   # the gotip (1.27-devel) toolchain on a native arm64 runner.
   fuzz-go1_27:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
