@@ -72,7 +72,7 @@ jobs:
           [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
 
   arm64-go1_27:
-    runs-on: ubuntu-24.04-arm
+    runs-on: ubuntu-26.04-arm
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
