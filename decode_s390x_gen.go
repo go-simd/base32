@@ -86,7 +86,7 @@ func constants() (spread, mul, g0, g1, g2 []byte) {
 	src := make([][]int, 5)
 	for i := 0; i < 8; i++ {
 		hb, lb, _ := fieldInfo(i)
-		src[hb] = append(src[hb], 2*i)      // high byte of window
+		src[hb] = append(src[hb], 2*i) // high byte of window
 		if lb != hb {
 			src[lb] = append(src[lb], 2*i+1) // low byte of window
 		}
@@ -144,17 +144,17 @@ func main() {
 		Raw("MOVD $%s(SB), R4", c5).Raw("VL (R4), V16").
 		Raw("MOVD $%s(SB), R4", c65).Raw("VL (R4), V17").
 		Raw("MOVD $%s(SB), R4", c24).Raw("VL (R4), V18").
-		Raw("VZERO V19").    // zero vector
-		Raw("MOVD $0, R5").  // blocks decoded
+		Raw("VZERO V19").   // zero vector
+		Raw("MOVD $0, R5"). // blocks decoded
 		Raw("CMPBEQ R3, $0, done").
 		Label("loop").
 		Raw("VL (R2), V0"). // V0 = 8 chars in bytes 0..7 (element 0 = lowest addr)
 		// validate: az = NOT(c-'A' >u 25); tw = NOT(c-'2' >u 5)
-		Raw("VSB V13, V0, V1"). // V1 = c-'A'   (VSB VRT,VRA,VRB: VRT=VRA-VRB? pinned by test)
+		Raw("VSB V13, V0, V1").                         // V1 = c-'A'   (VSB VRT,VRA,VRB: VRT=VRA-VRB? pinned by test)
 		Raw("VCHLB V1, V14, V1").Raw("VNO V1, V1, V1"). // az
-		Raw("VSB V15, V0, V2"). // V2 = c-'2'
+		Raw("VSB V15, V0, V2").                         // V2 = c-'2'
 		Raw("VCHLB V2, V16, V2").Raw("VNO V2, V2, V2"). // tw
-		Raw("VO V1, V2, V3"). // valid per lane
+		Raw("VO V1, V2, V3").                           // valid per lane
 		// block-valid: extract high doubleword (lanes 0..7) to GPR, require -1
 		Raw("VLGVG $0, V3, R6").
 		Raw("CMPBNE R6, $-1, done").
