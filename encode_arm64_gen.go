@@ -101,7 +101,7 @@ func constants() (spread, mul, pack, sh []byte) {
 		spread[2*i] = byte(lb)
 		spread[2*i+1] = byte(hb)
 		m := uint16(1) << uint(16-p)
-		mul[2*i] = byte(m)      // little-endian 16-bit multiplier
+		mul[2*i] = byte(m) // little-endian 16-bit multiplier
 		mul[2*i+1] = byte(m >> 8)
 		// After USHL -16 the field value sits in bits[4:0] of halfword lane i,
 		// i.e. the low (even) byte 2i of the vector.

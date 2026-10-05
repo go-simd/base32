@@ -10,9 +10,9 @@
 //  1. Validate + map ASCII -> 5-bit value, per lane, with two range checks done
 //     via saturating unsigned subtract (PCMPGTB is signed, so the classic
 //     PSUBUSB-then-compare-zero trick is used):
-//       az = (PSUBUSB(c-'A', 25) == 0)   -> c in 'A'..'Z'  (values 0..25)
-//       tw = (PSUBUSB(c-'2',  5) == 0)   -> c in '2'..'7'  (values 26..31)
-//       v  = ((c-65) & az) | ((c-24) & tw)
+//     az = (PSUBUSB(c-'A', 25) == 0)   -> c in 'A'..'Z'  (values 0..25)
+//     tw = (PSUBUSB(c-'2',  5) == 0)   -> c in '2'..'7'  (values 26..31)
+//     v  = ((c-65) & az) | ((c-24) & tw)
 //     A block is decoded only if all 8 lanes are valid; the function counts
 //     consumed blocks and stops before the first block containing any invalid
 //     char (the caller hands the remainder, plus the always-reserved final
@@ -157,7 +157,7 @@ func main() {
 
 	s := amd64.NewFunc("decodeBlocksSSE", sig(), 0)
 	s.LoadArg("dst_base", "DI").LoadArg("src_base", "SI").LoadArg("n", "CX").
-		Raw("XORQ AX, AX").  // AX = blocks decoded
+		Raw("XORQ AX, AX"). // AX = blocks decoded
 		Raw("TESTQ CX, CX").Raw("JZ ddone").
 		Label("dloop").
 		Raw("MOVQ (SI), X0"). // load 8 chars into low 8 bytes
@@ -175,9 +175,9 @@ func main() {
 		// value = ((c-65)&az) | ((c-24)&tw)
 		Raw("MOVO X0, X6").Raw("PSUBB %s+0(SB), X6", c65).Raw("PAND X1, X6"). // (c-65)&az
 		Raw("PSUBB %s+0(SB), X0", c24).Raw("PAND X2, X0").                    // (c-24)&tw
-		Raw("POR X6, X0").               // X0 = 8 values packed in bytes 0..7
-		Raw("PSHUFB %s+0(SB), X0", spread). // spread to low byte of each 16-bit lane
-		Raw("PMULLW %s+0(SB), X0", mul).    // value << p per 16-bit lane
+		Raw("POR X6, X0").                                                    // X0 = 8 values packed in bytes 0..7
+		Raw("PSHUFB %s+0(SB), X0", spread).                                   // spread to low byte of each 16-bit lane
+		Raw("PMULLW %s+0(SB), X0", mul).                                      // value << p per 16-bit lane
 		// scatter to 5 output bytes via 3 gathers + OR
 		Raw("MOVO X0, X7").Raw("PSHUFB %s+0(SB), X7", g0).
 		Raw("MOVO X0, X8").Raw("PSHUFB %s+0(SB), X8", g1).Raw("POR X8, X7").
@@ -215,8 +215,8 @@ func main() {
 		Label("vloop").
 		Raw("CMPQ CX, $2").Raw("JLT vtail").
 		// lane0 holds chars 0..7, lane1 holds chars 8..15, each in its low 8 bytes.
-		Raw("VMOVQ (SI), X0").              // X0 bytes[0:8] = chars 0..7
-		Raw("VMOVQ 8(SI), X1").             // X1 bytes[0:8] = chars 8..15
+		Raw("VMOVQ (SI), X0").             // X0 bytes[0:8] = chars 0..7
+		Raw("VMOVQ 8(SI), X1").            // X1 bytes[0:8] = chars 8..15
 		Raw("VINSERTI128 $1, X1, Y0, Y0"). // Y0 = lane0:chars0..7, lane1:chars8..15
 		// validate per lane
 		Raw("VPSUBB Y10, Y0, Y1").Raw("VPSUBUSB Y11, Y1, Y1").

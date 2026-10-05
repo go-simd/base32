@@ -85,7 +85,7 @@ func constants() (spread, shcnt, g0, g1, g2 []byte) {
 	src := make([][]int, 5)
 	for i := 0; i < 8; i++ {
 		hb, lb, _ := fieldInfo(i)
-		src[hb] = append(src[hb], 2*i)      // high byte of window
+		src[hb] = append(src[hb], 2*i) // high byte of window
 		if lb != hb {
 			src[lb] = append(src[lb], 2*i+1) // low byte of window
 		}
@@ -150,11 +150,11 @@ func main() {
 		Label("loop").
 		Raw("LXVB16X (R4), VS32"). // V0 = 8 chars in bytes 0..7 (BE elements)
 		// validate: az = NOT(c-'A' >u 25); tw = NOT(c-'2' >u 5)
-		Raw("VSUBUBM V0, V13, V1"). // V1 = c-'A'
+		Raw("VSUBUBM V0, V13, V1").                         // V1 = c-'A'
 		Raw("VCMPGTUB V1, V14, V1").Raw("VNOR V1, V1, V1"). // V1 = az (0xff if A..Z)
-		Raw("VSUBUBM V0, V15, V2"). // V2 = c-'2'
+		Raw("VSUBUBM V0, V15, V2").                         // V2 = c-'2'
 		Raw("VCMPGTUB V2, V16, V2").Raw("VNOR V2, V2, V2"). // V2 = tw
-		Raw("VOR V1, V2, V3"). // V3 = valid per lane
+		Raw("VOR V1, V2, V3").                              // V3 = valid per lane
 		// block-valid check: AND-reduce the 8 active lanes (bytes 0..7 = high
 		// doubleword) to a GPR and require all ones.
 		Raw("MFVSRD VS35, R8"). // R8 = high doubleword of V3 (bytes 0..7)
