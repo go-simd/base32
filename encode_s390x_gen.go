@@ -5,10 +5,11 @@
 // there, so there is no runtime feature dispatch — the kernel always runs).
 //
 // Algorithm (per 5-byte group -> 8 chars), a faithful port of the amd64 SSE
-// path, including its multiply-high trick — s390x is the one shipped non-amd64
-// arch with a genuine vector integer multiply-high (VMLHH), so it reproduces the
-// amd64 kernel almost instruction-for-instruction (this is exactly the op the Go
-// arm64 assembler lacks, which blocked the NEON port):
+// path, including its multiply-high trick — s390x has a genuine vector integer
+// multiply-high (VMLHH), so it reproduces the amd64 kernel almost
+// instruction-for-instruction. (arm64 gets the same high halves since Go 1.27
+// from the widening multiply VUMULL/VUMULL2 followed by a shift; see
+// encode_arm64_gen.go.)
 //
 //  1. VPERM (`shuf`) spreads the 16-byte input into eight 16-bit halfword lanes,
 //     each lane holding the big-endian 16-bit window containing one output char's

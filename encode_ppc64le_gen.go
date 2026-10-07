@@ -13,8 +13,9 @@
 //  2. VSRH performs a *per-lane variable* right shift by `shcnt[i] = p` so each
 //     char's 5-bit field drops to bits [4:0] of its halfword. (amd64 has no
 //     per-lane variable shift, so it fakes it with PMULHUW by 2^(16-p); ppc64le's
-//     VSX exposes the variable shift directly — one of the two ops the Go arm64
-//     assembler lacks that blocked the NEON port.)
+//     VSX exposes the variable shift directly. arm64 NEON has one too, VUSHL
+//     with a register count, assembled by Go since 1.27; see
+//     encode_arm64_gen.go.)
 //  3. VPERM (`pack`) gathers the low byte of each halfword (byte index 2i+1) into
 //     the low 8 bytes; VAND 0x1f isolates the value 0..31.
 //  4. Two-range ASCII map: v<26 -> 'A'+v, v>=26 -> '2'+(v-26), computed as

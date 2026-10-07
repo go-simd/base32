@@ -26,11 +26,11 @@ jobs:
           pct=$(go tool cover -func=cov.out | awk '/^total:/{print $3}')
           echo "coverage=$pct"
           [ "$pct" = "100.0%" ] || { echo "coverage below 100%"; exit 1; }
-  # The arm64 NEON encode kernel uses the integer widening multiply (VUMULL),
-  # the register-variable shift (VUSHL) and table-lookup (VTBL) the Go assembler
-  # only gained in Go 1.27, so it builds under //go:build arm64 && go1.27.
-  # Exercise it on the gotip (1.27-devel) toolchain on native arm64, and gate at
-  # 100% — this is the only job that compiles and covers encode_arm64.go / .s.
+  # The arm64 NEON encode and decode kernels use NEON ops (VUMULL, VUSHL, VTBL,
+  # VUMINV) the Go assembler gained in Go 1.27. The module's floor is 1.27.1, so
+  # the native arm64 job above already compiles, tests and covers them; the
+  # arm64-go1_27 job below re-runs the same suite on gotip as a forward-compat
+  # lane for the assembler.
   # macOS and Windows.
   #
   # A fleet audit of the 601 repositories holding Go code found the OS axis to
