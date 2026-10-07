@@ -1,4 +1,4 @@
-//go:build ppc64le || s390x
+//go:build ppc64le || s390x || arm64
 
 package base32
 
@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-// TestDecodeVecKernel drives the VSX/vector decode kernel through decodeSIMD
+// TestDecodeVecKernel drives the VSX/vector/NEON decode kernel through decodeSIMD
 // across many lengths and alignments, finishing the remainder with
 // encoding/base32 exactly as the public Decode does, and compares byte-for-byte
 // against the stdlib. This runs the SIMD path even on the (qemu) build where it

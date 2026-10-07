@@ -2,24 +2,19 @@
 
 // Command gen produces encode_arm64.s with go-asmgen: a vectorised base32
 // (RFC 4648 StdEncoding) encoder for arm64 NEON. It is a faithful port of the
-// amd64 SSE path (spread / multiply-high / mask / alphabet-map), and is the
-// concrete demonstration of the three NEON ops the *released* Go arm64
-// assembler does not expose but Go master / Go 1.27 does — the same gap the
-// ppc64le (VSRH) and s390x (VMLHH) ports already worked around:
+// amd64 SSE path (spread / multiply-high / mask / alphabet-map). It relies on
+// three NEON ops the Go arm64 assembler gained in Go 1.27 (the module's floor);
+// before that the port was blocked, and ppc64le (VSRH) and s390x (VMLHH) were
+// the only non-amd64 kernels:
 //
 //   - VUMULL / VUMULL2 : the integer *widening* vector multiply (16x16 -> 32).
-//     Released Go only assembled the polynomial VPMULL; the integer multiply
-//     mnemonics landed upstream in Go 1.27.
-//   - USHL : the per-lane *register-variable* shift (the shift count comes from
+//     Earlier Go assembled only the polynomial VPMULL.
+//   - VUSHL : the per-lane *register-variable* shift (the shift count comes from
 //     a vector register, one count per lane), used here to take the high half
 //     of each 32-bit product (multiply-high == amd64 PMULHUW).
 //   - VTBL : the table-lookup permute, used twice — once to spread the 5-byte
 //     group into eight big-endian 16-bit windows, once as the 32-entry base32
 //     alphabet LUT (a two-register table, which covers indices 0..31).
-//
-// Because these are //go:build go1.27-only, the generated kernel is guarded
-// //go:build arm64 && go1.27 and the stable build falls back to the standard
-// library via encode_generic.go.
 //
 // Algorithm (per 5-byte group -> 8 chars):
 //
@@ -48,7 +43,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/go-asmgen/asmgen/abi"
 	"github.com/go-asmgen/asmgen/arm64"
@@ -173,10 +167,7 @@ func main() {
 		Label("done").Ret()
 	f.Add(b.Func())
 
-	// VUMULL / USHL (integer) are only assemblable on Go 1.27+, matching the
-	// //go:build go1.27 Go file; emit writes a bare "arm64", narrow it here.
-	out := strings.Replace(f.String(), "//go:build arm64\n", "//go:build arm64 && go1.27\n", 1)
-	if err := os.WriteFile("encode_arm64.s", []byte(out), 0o644); err != nil {
+	if err := os.WriteFile("encode_arm64.s", []byte(f.String()), 0o644); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

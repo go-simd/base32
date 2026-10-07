@@ -1,4 +1,4 @@
-//go:build arm64 && go1.27
+//go:build arm64
 
 package base32
 
@@ -11,7 +11,7 @@ import (
 // TestEncodeNEONKernel drives the NEON kernel through encodeSIMD across many
 // lengths and alignments, finishing the tail with encoding/base32 exactly as the
 // public Encode does, and compares byte-for-byte against the stdlib. This runs
-// the SIMD path on every native arm64 / Go 1.27 host.
+// the SIMD path on every native arm64 host.
 func TestEncodeNEONKernel(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	for _, n := range []int{0, 1, 4, 5, 9, 10, 15, 16, 17, 20, 21, 25, 30, 31, 32, 33, 100, 1000, 4096} {
@@ -58,15 +58,6 @@ func TestEncodeSIMDDispatchNEON(t *testing.T) {
 		if want := stdb32.StdEncoding.EncodeToString(src); string(dst) != want {
 			t.Fatalf("n=%d exact:\n got=%q\nwant=%q", n, string(dst), want)
 		}
-	}
-}
-
-// TestDecodeSIMDNoopNEON pins arm64's no-op decodeSIMD: there is no NEON decode
-// kernel, so it must always report (0,0) and leave the whole input to the stdlib
-// (covered for the coverage gate).
-func TestDecodeSIMDNoopNEON(t *testing.T) {
-	if sd, dd := decodeSIMD(make([]byte, 64), make([]byte, 64)); sd != 0 || dd != 0 {
-		t.Fatalf("decodeSIMD: want (0,0), got (%d,%d)", sd, dd)
 	}
 }
 

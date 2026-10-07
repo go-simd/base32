@@ -19,23 +19,23 @@ b, err := base32.DecodeString(s)      // same bytes AND same error offsets
 
 | op | amd64 | ppc64le | s390x | arm64 | loong64 / riscv64 |
 |---|---|---|---|---|---|
-| encode | **AVX2 + SSE2** | **VSX** | **vector facility** | **NEON** on **Go 1.27+**, scalar on stable | scalar (stdlib) |
-| decode | **AVX2 + SSE2** | **VSX** | **vector facility** | scalar (stdlib) | scalar (stdlib) |
+| encode | **AVX2 + SSE2** | **VSX** | **vector facility** | **NEON** | scalar (stdlib) |
+| decode | **AVX2 + SSE2** | **VSX** | **vector facility** | **NEON** | scalar (stdlib) |
 
-The encode fast path covers five ISAs across six architectures. **ppc64le, s390x
-and (on Go 1.27+) arm64 run the *full* kernel** — the same algorithm amd64 uses —
-because POWER (VSX), Z (vector facility) and NEON each provide the per-lane
-variable shift / integer vector multiply the amd64 path relies on. On arm64 those
-ops (`VUMULL`, `VUSHL`, `VTBL`) were only added to the Go assembler in **Go
-1.27**, which is precisely what blocked the NEON port until now (see below); on
-**stable Go (≤ 1.26)** arm64 encode falls back to `encoding/base32`. The ppc64le
+The encode and decode fast paths cover five ISAs across six architectures.
+**ppc64le, s390x and arm64 run the *full* kernels** — the same algorithm amd64
+uses — because POWER (VSX), Z (vector facility) and NEON each provide the
+per-lane variable shift / integer vector multiply the amd64 path relies on. On
+arm64 those ops (`VUMULL`, `VUSHL`, `VTBL`, `VUMINV`) are assembled by Go 1.27,
+the module's floor, so the NEON kernels always run on arm64. The ppc64le
 and s390x kernels are **qemu-validated** (byte-and-error-identical to
 `encoding/base32` via the exhaustive + fuzz differential tests under QEMU
-`power9` / `qemu`); the arm64 NEON kernel is **validated on native arm64 with the
-`gotip` (1.27-devel) toolchain**. **ppc64le is now natively measured on real
+`power9` / `qemu`); the arm64 NEON kernels are`power9` / `qemu`); the arm64 NEON kernel is **validated on native arm64 (Apple silicon,
+Go 1.27.1)**: decode runs **~25× and encode ~2.1× the stdlib scalar code** at
+1 MiB (see Performance). **ppc64le is now natively measured on real
 POWER9 silicon** (GCC Compile Farm, https://portal.cfarm.net/ , VSX, Go 1.26.4,
 2026-06-26): SIMD decode runs **~5.5× the stdlib scalar decoder (621 vs 113
-MB/s)** — a real VSX kernel (`VSRH`) on hardware where arm64 stable can't run one.
+MB/s)** — a real VSX kernel (`VSRH`).
 s390x is now **natively measured on real IBM z15 (VXE2)** (2026-07-03,
 `-count=6`): SIMD decode runs **~8.4×** and encode **~3.4×** the stdlib scalar
 baseline.
@@ -86,17 +86,15 @@ Both kernels emit a full 16-byte store per 5-byte group (only the low 8 chars ar
 kept); the dispatcher caps the group count so the final store stays in bounds and
 hands the tail to `encoding/base32`.
 
-### arm64 (NEON) — Go 1.27+
+### arm64 (NEON)
 
-The NEON encode kernel is a faithful port of the amd64 five-step path, and is the
-concrete demonstration of the three NEON ops the *released* Go arm64 assembler
-does not expose but **Go master / Go 1.27** does — the same gap ppc64le (`VSRH`)
-and s390x (`VMLHH`) already worked around:
+The NEON encode kernel is a faithful port of the amd64 five-step path. Go 1.27,
+the module's floor, assembles the NEON ops it needs (before 1.27 the Go arm64
+assembler had only the polynomial `VPMULL`, which blocked the port):
 
 - **`VUMULL` / `VUMULL2`** — the integer *widening* vector multiply (16×16 → 32).
-  Released Go only assembled the polynomial `VPMULL`; the integer multiply
-  mnemonics landed upstream in Go 1.27. The kernel multiplies each 16-bit window
-  by `2^(16-p)` and keeps the high 16 bits (multiply-high == amd64 `PMULHUW`).
+  The kernel multiplies each 16-bit window by `2^(16-p)` and keeps the high 16
+  bits (multiply-high == amd64 `PMULHUW`, s390x `VMLHH`).
 - **`VUSHL`** — the per-lane *register-variable* shift (one count per lane, taken
   from a vector register), used to take the high half of each 32-bit product.
 - **`VTBL`** — table-lookup permute, used twice: once to spread the 5-byte group
@@ -106,11 +104,7 @@ and s390x (`VMLHH`) already worked around:
 
 The chain is `VLD1` → `VTBL` spread → `VUMULL`/`VUMULL2` → `VUSHL` (−16) → `VXTN`
 → `VAND 0x1f` → `VTBL` pack → `VTBL` alphabet → `VST1`. NEON is baseline on
-arm64, so there is no runtime dispatch. The kernel is gated `//go:build arm64 &&
-go1.27`; on **stable Go (≤ 1.26)** the build falls back to the scalar
-`encoding/base32` path (`encode_generic.go`). Validated byte-and-error-identical
-to `encoding/base32` (table + exhaustive + `FuzzEncode`) on **native arm64 under
-`gotip`**, where it measures **~2.1× the stdlib scalar encoder**.
+arm64, so there is no runtime dispatch.
 
 ## Decode
 
@@ -139,7 +133,22 @@ over the SIMD-consumed prefix. This keeps decode **byte-and-offset identical to
 `base32.StdEncoding.Decode`** (RFC 4648 padding + error semantics) while still
 vectorising the common all-valid bulk. The AVX2 path decodes two blocks at once,
 one per 128-bit lane. Validated against `encoding/base32` (table + exhaustive +
-fuzz) on **real AVX2 hardware** and under QEMU `power9` / `qemu` for VSX / Z.
+fuzz) on **real AVX2 hardware**, under QEMU `power9` / `qemu` for VSX / Z, and
+on **native arm64** for NEON.
+
+### arm64 (NEON) decode
+
+NEON needs no range compares: one **three-register `VTBL`** (48 entries) indexed
+by `c - '2'` maps every alphabet char to `0x40 | value` and everything else —
+including `=` and any byte whose index falls past the table, for which `VTBL`
+returns 0 — to 0. **`VUMINV`** (unsigned minimum across lanes) then validates a
+whole block pair in one instruction: the minimum is `>= 0x40` iff all 16 chars
+are in the alphabet. `VAND 0x1f` leaves the values, a `VTBL` spreads them into
+halfword lanes, **`VUSHL`** by the per-lane count `p` shifts each into its output
+window (the inverse of the encoder's multiply-high), and three two-register
+`VTBL` gathers + `VORR` produce 10 output bytes per iteration. A single-block
+step handles the last block and the first block of an invalid pair, after which
+the kernel stops and hands the rest to `encoding/base32`.
 
 ## Performance
 
@@ -165,15 +174,32 @@ QEMU x86_64 lima VM (so absolutes are TCG-low, but the SSE-vs-stdlib *ratio*
 holds): forced-SSE **~243 MB/s vs stdlib ~181 MB/s = ~1.34×** — SIMD still beats
 the scalar encoder even on the worst-case in-order TCG model. (Forced-AVX2 is
 ~parity under TCG, ~185 MB/s: 32-byte ops gain nothing without OoO execution —
-exactly why the native EPYC numbers above are the representative ones.) On
-**native arm64 under `gotip` / Go 1.27** the NEON encode kernel engages and
-measures **~7400 MB/s vs the stdlib scalar encoder ~3530 MB/s ≈ 2.1×** (`-count`
-medians on an Apple-silicon dev box; see the arm64 section above). On **stable Go
-(≤ 1.26)** arm64 encode is an alias of `encoding/base32` (stdlib parity by
-construction). Verdict: SIMD encode wins on amd64 and on arm64/go1.27+; arm64 on
-stable Go = stdlib fallback.
+exactly why the native EPYC numbers above are the representative ones.)
+
+**Native arm64** (Apple silicon, Go 1.27.1, 2026-10-07; 12 alternating runs of
+the old scalar arm64 decode path vs the NEON kernel, 1-minute load below 8 at
+every run start; median ns/op, sizes and MB/s count the binary bytes in both
+directions; the same harness compares `encoding/base32` encode):
+
+| bytes | decode, scalar (before) | decode, NEON | speed-up | encode, stdlib | encode, NEON | speed-up |
+|---:|---:|---:|---:|---:|---:|---:|
+| 16 | 47.6 ns | 38.9 ns | 1.22× | 7.0 ns | 9.9 ns | 0.70× |
+| 32 | 95.6 ns | 41.3 ns | 2.32× | 10.9 ns | 10.9 ns | 1.01× |
+| 64 | 178.3 ns | 44.9 ns | 3.97× | 20.0 ns | 13.2 ns | 1.51× |
+| 128 | 362.4 ns | 47.5 ns | 7.64× | 37.7 ns | 20.3 ns | 1.86× |
+| 256 | 696.7 ns | 55.7 ns | 12.5× | 74.5 ns | 34.8 ns | 2.14× |
+| 1 KiB | 2.65 µs | 0.134 µs | 19.7× | 286 ns | 136 ns | 2.09× |
+| 4 KiB | 10.3 µs | 0.433 µs | 23.8× | 1.13 µs | 0.533 µs | 2.13× |
+| 64 KiB | 162 µs | 6.47 µs | 25.0× | 17.9 µs | 8.55 µs | 2.09× |
+| 1 MiB | 2.58 ms (406 MB/s) | 0.103 ms (10210 MB/s) | 25.1× | 283 µs (3705 MB/s) | 137 µs (7677 MB/s) | 2.07× |
+
+The 16-byte encode row is the one place NEON loses: one 5-byte group goes
+through the kernel and the remaining 11 bytes still go to the stdlib, so the
+call costs more than it saves. Verdict: SIMD encode and decode win on amd64 and
+arm64.
 
 The
+speedup is somewhat belowThe
 speedup is somewhat below base64's because base32's 5-bit grouping forces an
 8-byte store per 5-byte group (vs base64's full 16-byte store per 12 bytes) and a
 longer serial extract chain — inherent to the format.
@@ -184,27 +210,25 @@ QEMU x86_64 lima VM (TCG, in-order — absolutes are low, but the SIMD-vs-stdlib
 decode is allocation-free (`0 B/op`) where the stdlib path allocates per call in
 this harness. Native EPYC numbers (representative, with out-of-order execution)
 are pending a CI bench run; expect a higher ratio there, as with encode. On
-native arm64 / loong64 / riscv64, decode is an alias of `encoding/base32`
-(stdlib parity by construction).
+loong64 / riscv64, decode is an alias of `encoding/base32` (stdlib parity by
+construction); on arm64 it runs the NEON kernel (table above).
 
 - **ppc64le**: full SIMD encode (above), now **natively measured on real POWER9**
   (GCC Compile Farm, VSX, Go 1.26.4, 2026-06-26): SIMD decode **~5.5× the stdlib
-  scalar decoder (621 vs 113 MB/s)**, a real VSX kernel where arm64 stable can't
-  run one.
+  scalar decoder (621 vs 113 MB/s)**.
 - **s390x**: full SIMD encode (above), now **natively measured on real IBM z15
   (VXE2)** (2026-07-03, `-count=6`): SIMD decode **~8.4×** and encode **~3.4×**
   the stdlib scalar baseline. POWER and Z
   supply the per-lane variable shift / multiply-high natively, so they run the
-  whole kernel — and as of Go 1.27 arm64 NEON does too (the ops it was missing
-  finally landed upstream).
-- **arm64 (Go 1.27+)**: full NEON SIMD encode (above), **validated on native
-  arm64 under `gotip`, ~2.1× the stdlib scalar encoder**.
+  whole kernel — and so does arm64 NEON.
+- **arm64**: full NEON SIMD encode and decode (above), measured on native arm64:
+  encode **~2.1×**, decode **~25×** the stdlib scalar code at 1 MiB.
 - **riscv64**: now **natively measured on a real SpacemiT X60** (RVV 1.0, GCC
   Compile Farm, Go 1.26.4, 2026-06-26). **Honest result: scalar parity** —
   decode **27.4 vs stdlib 27.6 MB/s**, encode **155 vs 155** (encode falls back
   to `encoding/base32` here, and decode is an alias of the stdlib decoder). No
   RVV win on this low-power, *in-order* core (currently the only widely-available
-  RVV 1.0 silicon); the SIMD encode wins stay on amd64, ppc64le and arm64 (1.27).
+  RVV 1.0 silicon); the SIMD wins stay on amd64, ppc64le, s390x and arm64.
 
 ### llvm-mca cycle-model estimate (historical — both ppc64le and s390x now measured)
 
@@ -245,18 +269,10 @@ estimates only. The ppc64le estimate has now been superseded by a native POWER9
 measurement (above), and the s390x estimate by the native IBM z15 (VXE2)
 measurement (2026-07-03): SIMD decode ~8.4×, encode ~3.4× the stdlib scalar
 baseline.
-- **arm64**: on **stable Go (≤ 1.26)** encode falls back to `encoding/base32` —
-  the per-char 5-bit fields need a per-lane variable shift and an integer vector
-  multiply, and the *released* Go arm64 assembler exposed neither a register-form
-  `VUSHL` nor the integer `VUMULL`/`VMUL`, so the multiply-shift trick could not
-  be expressed. Those mnemonics were upstreamed in **Go 1.27**, so on **Go 1.27+**
-  a `//go:build arm64 && go1.27` NEON kernel runs the full encode (above). The
-  exact ops ppc64le (`VSRH`) and s390x (`VMLHH`) used to work around the gap are
-  now natively available on arm64 too.
 - **loong64 / riscv64**: encode falls back to `encoding/base32`.
-- **decode** runs the same SIMD coverage on amd64 (AVX2+SSE), ppc64le (VSX) and
-  s390x (vector facility); arm64/loong64/riscv64 use the scalar stdlib decode
-  (there is no NEON *decode* kernel — the arm64 fast path is encode-only). Error and
+- **decode** runs the same SIMD coverage on amd64 (AVX2+SSE), ppc64le (VSX),
+  s390x (vector facility) and arm64 (NEON); loong64/riscv64 use the scalar
+  stdlib decode. Error and
   padding semantics stay exactly identical to the stdlib because every block that
   isn't a full 8 valid-alphabet chars (and the final block) is delegated to
   `encoding/base32`, with `CorruptInputError` offsets shifted to match.
@@ -273,17 +289,17 @@ vector kernel. ppc64 carries no SIMD kernel; it exercises the scalar
 non-vector arch.
 
 The CI gate enforces **100% coverage of the Go code** on each arch job: native
-amd64 + native arm64 (stable), a native **arm64 / `gotip` (Go 1.27-devel)** job
-that compiles and covers the `//go:build arm64 && go1.27` NEON kernel, plus
+amd64 + native arm64 (which compiles and covers the NEON kernels' Go side), a
+native **arm64 / `gotip`** forward-compat job running the same suite, plus
 **emulated ppc64le + s390x** (cross-compiled test binary run under QEMU `power9` /
 `qemu` in a `debian:trixie` container, coverage profile extracted from the
-binary). On stable arm64 the
-`!amd64 && !ppc64le && !s390x && !(arm64 && go1.27)` generic fallback compiles and
-is measured; on the `gotip` job the NEON path is measured instead. Coverage is of
-the Go statements only: the generated `.s` SIMD kernels are not measured by `go
-test -cover` — they are validated by differential tests against the scalar
-`encoding/base32` reference plus fuzzing (`FuzzEncode`/`FuzzDecode`, run on the
-`gotip` job so the NEON kernel is fuzzed too).
+binary); the macOS and Windows jobs measure the amd64/arm64 paths there. On
+loong64 / riscv64 the `!amd64 && !ppc64le && !s390x && !arm64` generic fallback
+compiles and is measured. Coverage is of the Go statements only: the generated
+`.s` SIMD kernels are not measured by `go test -cover` — they are validated by
+differential tests against the scalar `encoding/base32` reference plus fuzzing
+(`FuzzEncode`/`FuzzDecode`, seed corpus on every CI job, randomized nightly on
+amd64 and arm64).
 
 ## License
 

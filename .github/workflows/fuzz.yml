@@ -36,8 +36,8 @@ jobs:
           path: testdata/fuzz/
           if-no-files-found: ignore
 
-  # The arm64 NEON kernels build only under //go:build go1.27, so fuzz them on
-  # the gotip (1.27-devel) toolchain on a native arm64 runner.
+  # The arm64 NEON kernels are also fuzzed by the native arm64 job above (the
+  # module's floor, Go 1.27.1, assembles them); this job repeats it on gotip.
   fuzz-go1_27:
     runs-on: ubuntu-26.04-arm
     steps:
