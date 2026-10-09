@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
-        with: { go-version: 1.27.1 }
+        with: { go-version: 1.27.2 }
       - run: grep -m1 -oE 'avx2|avx512[a-z]+' /proc/cpuinfo | sort -u | tr "\n" " "; echo
       - name: go env
         run: go env GOARCH GOAMD64
